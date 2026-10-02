@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AndyBirds WebXR</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #c1b3b5; font: 14px/1.4 system-ui, sans-serif; }
+    canvas { display: block; touch-action: none; }
+    #overlay {
+      position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; padding: 16px; box-sizing: border-box; text-align: center; color: #fff;
+      background: rgba(20, 16, 18, 0.45); transition: opacity 0.4s;
+    }
+    #overlay.hidden { opacity: 0; pointer-events: none; }
+    #overlay h1 { margin: 0; font-weight: 600; letter-spacing: 0.04em; }
+    #overlay p { margin: 0; max-width: 34em; opacity: 0.85; }
+    #buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    #buttons button {
+      padding: 12px 22px; border: 1px solid #fff; border-radius: 4px; background: rgba(0, 0, 0, 0.2);
+      color: #fff; font: 13px sans-serif; cursor: pointer; min-width: 150px;
+    }
+    #buttons button:hover { background: rgba(0, 0, 0, 0.45); }
+    #hud {
+      position: fixed; left: 8px; bottom: 8px; right: 8px; color: #fff; font: 12px ui-monospace, monospace;
+      text-shadow: 0 1px 2px #000; pointer-events: none; white-space: pre-wrap;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+      "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.20.0/dist/lil-gui.esm.min.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="overlay">
+    <h1>AndyBirds</h1>
+    <p>A gaze-driven GPU flock. The birds chase whatever you look at, choreographed to the music.
+       Eye tracking is used when available; otherwise the flock follows your nose.</p>
+    <p id="loading">Loading…</p>
+    <div id="buttons">
+      <button id="start">START ON DESKTOP</button>
+    </div>
+    <p style="font-size:12px">Desktop: drag to look around. Open the panel (top right) to tweak the flock.</p>
+  </div>
+  <div id="hud"></div>
+  <audio id="music" src="assets/music.mp3" preload="auto"></audio>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
