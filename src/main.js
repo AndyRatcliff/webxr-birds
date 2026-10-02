@@ -37,7 +37,17 @@ const settings = {
   choreography: query.get('choreography') !== '0',
   reticle: query.get('reticle') === '1',
   mouseGaze: false,
+  model: (query.get('model') || 'sparrow').toLowerCase(),
 };
+
+const MODELS = {
+  sparrow: { label: 'Sparrow', json: 'assets/sparrow.json', map: 'assets/sparrow.jpg', frameSpeedScale: 1 },
+  // Larger wing travel reads faster at the same 16-frame rate — slow the cycle.
+  bat: { label: 'Bat', json: 'assets/bat.json', map: 'assets/bat.png', frameSpeedScale: 0.55 },
+};
+if (!MODELS[settings.model]) settings.model = 'sparrow';
+// Bust HTTP cache when rebaking assets during local iteration.
+const ASSET_VER = '13';
 
 // ---------------------------------------------------------------- renderer / scene
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -83,8 +93,9 @@ let audioOk = true;
 let started = false;
 let clockStart = 0;
 let flock = null;
-let sparrow = null;
-let sparrowMap = null;
+let species = null;   // baked mesh JSON (sparrow/bat)
+let speciesMap = null;
+const speciesCache = new Map(); // model id -> { json, map }
 
 music.addEventListener('error', () => { audioOk = false; });
 
@@ -106,11 +117,54 @@ function buildFlock() {
     scene.remove(flock.mesh);
     flock.dispose();
   }
-  flock = new GPUFlock(renderer, { count: settings.boids, sparrow, map: sparrowMap, params: flockParams });
+  flock = new GPUFlock(renderer, {
+    count: settings.boids,
+    sparrow: species,
+    map: speciesMap,
+    params: flockParams,
+    speedLinkedFlap: settings.model === 'bat',
+    frameSpeedScale: MODELS[settings.model]?.frameSpeedScale ?? 1,
+  });
   flock.samplesPerBoid = settings.samples;
   scene.add(flock.mesh);
   flock.reset(flockRoot);
   window.andyBirds = { flock, renderer, settings }; // console/debug handle
+}
+
+async function loadSpecies(id) {
+  if (!MODELS[id]) id = 'sparrow';
+  if (speciesCache.has(id)) {
+    const cached = speciesCache.get(id);
+    species = cached.json;
+    speciesMap = cached.map;
+    settings.model = id;
+    return;
+  }
+  const def = MODELS[id];
+  const [json, map] = await Promise.all([
+    fetch(`${def.json}?v=${ASSET_VER}`).then((r) => {
+      if (!r.ok) throw new Error(`Failed to load ${def.json}`);
+      return r.json();
+    }),
+    new THREE.TextureLoader().loadAsync(`${def.map}?v=${ASSET_VER}`),
+  ]);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.flipY = false;
+  map.anisotropy = 4;
+  speciesCache.set(id, { json, map });
+  species = json;
+  speciesMap = map;
+  settings.model = id;
+}
+
+async function setModel(id) {
+  if (id === settings.model && species) return;
+  await loadSpecies(id);
+  const url = new URL(location.href);
+  if (id === 'sparrow') url.searchParams.delete('model');
+  else url.searchParams.set('model', id);
+  history.replaceState(null, '', url);
+  buildFlock();
 }
 
 function restart() {
@@ -170,6 +224,9 @@ window.addEventListener('resize', () => {
 // ---------------------------------------------------------------- GUI / HUD
 const gui = new GUI({ title: 'GPU Flock' });
 gui.close();
+gui.add(settings, 'model', Object.fromEntries(Object.entries(MODELS).map(([k, v]) => [v.label, k])))
+  .name('Species')
+  .onChange((id) => { setModel(id).catch(console.error); });
 const simFolder = gui.addFolder('Simulation');
 simFolder.add(settings, 'boids', 256, 65536, 256).name('BoidsCount').onFinishChange(() => restart());
 simFolder.add(settings, 'samples', 0, 8192, 64).name('neighbour samples (0 = all)')
@@ -194,9 +251,10 @@ function updateHud(dt) {
   hudTimer = 0.25;
   const stride = settings.samples > 0 ? Math.max(1, Math.ceil(flock.count / settings.samples)) : 1;
   const p = flock.params;
+  const speciesName = MODELS[settings.model]?.label || settings.model;
   hud.textContent =
     `gaze: ${gaze.source}${gaze.bridge.url ? ` [bridge ${gaze.bridge.status}]` : ''}  |  ` +
-    `${flock.count} boids, ${stride === 1 ? 'all neighbours' : `1/${stride} neighbours`}  |  ` +
+    `${speciesName} × ${flock.count}, ${stride === 1 ? 'all neighbours' : `1/${stride} neighbours`}  |  ` +
     `bar ${choreo.beatCount}  ND ${p.NeighbourDistance.toFixed(2)}  speed ${p.BoidSpeed.toFixed(2)}  ` +
     `var ${p.BoidSpeedVariation.toFixed(2)}  |  ${fps.toFixed(0)} fps`;
 }
@@ -243,16 +301,7 @@ function frame(time, xrFrame) {
 
 // ---------------------------------------------------------------- boot
 async function boot() {
-  const [json, map] = await Promise.all([
-    fetch('assets/sparrow.json').then((r) => r.json()),
-    new THREE.TextureLoader().loadAsync('assets/sparrow.jpg'),
-  ]);
-  sparrow = json;
-  map.colorSpace = THREE.SRGBColorSpace;
-  map.flipY = false; // UVs come from the glTF conversion
-  map.anisotropy = 4;
-  sparrowMap = map;
-
+  await loadSpecies(settings.model);
   buildFlock();
 
   const vrButton = VRButton.createButton(renderer);

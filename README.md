@@ -25,6 +25,7 @@ Otherwise serve it over HTTPS.
 | Param | Default | Meaning |
 | --- | --- | --- |
 | `boids` | 28000 desktop, 8192 standalone headset | `BoidsCount` |
+| `model` | `sparrow` | Species mesh: `sparrow` or `bat` |
 | `samples` | 2048 desktop, 256 standalone | Neighbours checked per boid per frame. `0` = all of them, the exact O(N²) loop of the original |
 | `gazeSocket` | – | WebSocket URL of an eye-tracker bridge, e.g. `ws://localhost:8887` |
 | `reticle` | off | `1` shows the flock target (the Unity sphere renderer was disabled) |
@@ -76,6 +77,9 @@ The sources below are tried in priority order. The HUD shows which one is active
 cd tools
 npm install
 npm run bake        # FBX -> glTF (FBX2glTF) -> sample 16 frames -> ../assets/sparrow.json
+npm run bake:bat    # bat-fixed.glb wing_flap -> ../assets/bat.json (+ bat.png)
 ```
+
+`bake:bat` reads `c:/Users/araf/Downloads/bat-fixed.glb` by default (override with `BAT_GLB=...`). Switch species at runtime with `?model=bat` or the **Species** control in the GPU Flock panel.
 
 `assets/music.mp3` is copied from `Assets/` and is a commercial track. Remove or replace it before hosting the page publicly; without it the choreography runs on a silent clock.

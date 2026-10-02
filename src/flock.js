@@ -162,7 +162,7 @@ export class GPUFlock {
    * @param {object} opts.sparrow          baked mesh from assets/sparrow.json
    * @param {THREE.Texture} opts.map       Sparrow.jpg
    */
-  constructor(renderer, { count, sparrow, map, params = GPUFlock.defaultParams() }) {
+  constructor(renderer, { count, sparrow, map, params = GPUFlock.defaultParams(), speedLinkedFlap = false, frameSpeedScale = 1 }) {
     this.renderer = renderer;
     this.count = count;
     this.width = TEX_WIDTH;
@@ -171,6 +171,8 @@ export class GPUFlock {
     this.frameIndex = 0;
     this.samplesPerBoid = 0; // 0 = check every boid (exact port)
     this.params = params;
+    this.speedLinkedFlap = speedLinkedFlap;
+    this.frameSpeedScale = frameSpeedScale;
 
     const floatOk = renderer.extensions.has('EXT_color_buffer_float');
     this.texType = floatOk ? THREE.FloatType : THREE.HalfFloatType;
@@ -320,7 +322,7 @@ export class GPUFlock {
     pu.uPos.value = this.posRT[cur].texture;
     pu.uDir.value = this.dirRT[nxt].texture;
     pu.uDeltaTime.value = dt;
-    pu.uBoidFrameSpeed.value = p.BoidFrameSpeed;
+    pu.uBoidFrameSpeed.value = p.BoidFrameSpeed * this.frameSpeedScale;
     this.runPass(this.positionPass, this.posRT[nxt]);
 
     this.current = nxt;
@@ -336,9 +338,12 @@ export class GPUFlock {
   createMesh(sparrow, map) {
     const V = sparrow.vertexCount;
     const F = sparrow.frames;
+    // Extra rows: mean rest pose (pos + normal) for speed-linked flap amplitude.
+    const REST_POS = F * 2;
+    const REST_NRM = F * 2 + 1;
 
-    // Rows [0, F): positions per frame, rows [F, 2F): normals per frame. One texel per vertex.
-    const anim = new Float32Array(V * F * 2 * 4);
+    // Rows [0, F): positions, [F, 2F): normals, then rest pos/normal. One texel per vertex.
+    const anim = new Float32Array(V * (F * 2 + 2) * 4);
     for (let f = 0; f < F; f++) {
       for (let v = 0; v < V; v++) {
         const s = (f * V + v) * 3;
@@ -346,7 +351,23 @@ export class GPUFlock {
         anim.set([sparrow.normals[s], sparrow.normals[s + 1], sparrow.normals[s + 2], 0], ((F + f) * V + v) * 4);
       }
     }
-    const animTex = new THREE.DataTexture(anim, V, F * 2, THREE.RGBAFormat, THREE.FloatType);
+    for (let v = 0; v < V; v++) {
+      let px = 0, py = 0, pz = 0, nx = 0, ny = 0, nz = 0;
+      for (let f = 0; f < F; f++) {
+        const s = (f * V + v) * 3;
+        px += sparrow.positions[s];
+        py += sparrow.positions[s + 1];
+        pz += sparrow.positions[s + 2];
+        nx += sparrow.normals[s];
+        ny += sparrow.normals[s + 1];
+        nz += sparrow.normals[s + 2];
+      }
+      const inv = 1 / F;
+      anim.set([px * inv, py * inv, pz * inv, 1], (REST_POS * V + v) * 4);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      anim.set([(nx * inv) / nl, (ny * inv) / nl, (nz * inv) / nl, 0], (REST_NRM * V + v) * 4);
+    }
+    const animTex = new THREE.DataTexture(anim, V, F * 2 + 2, THREE.RGBAFormat, THREE.FloatType);
     animTex.minFilter = animTex.magFilter = THREE.NearestFilter;
     animTex.needsUpdate = true;
 
@@ -373,6 +394,9 @@ export class GPUFlock {
       uAnim: { value: animTex },
       uTexWidth: { value: this.width },
       uFrames: { value: F },
+      uSpeedFlap: { value: this.speedLinkedFlap ? 1 : 0 },
+      uFlapRefSpeed: { value: MAX_VELOCITY_ANIMATION_SPEED },
+      uFlapMinAmp: { value: 0.2 },
     };
 
     material.onBeforeCompile = (shader) => {
@@ -385,13 +409,17 @@ uniform highp sampler2D uStatic;
 uniform highp sampler2D uAnim;
 uniform int uTexWidth;
 uniform int uFrames;
+uniform float uSpeedFlap;
+uniform float uFlapRefSpeed;
+uniform float uFlapMinAmp;
 attribute float vid;
 `)
         .replace('#include <beginnormal_vertex>', /* glsl */ `
   // setup(): fetch this instance's boid
   ivec2 boidCoord = ivec2(gl_InstanceID % uTexWidth, gl_InstanceID / uTexWidth);
   vec4 boidPosFrame = texelFetch(uPos, boidCoord, 0);
-  vec3 boidDir = texelFetch(uDir, boidCoord, 0).xyz;
+  vec4 boidDirVel = texelFetch(uDir, boidCoord, 0);
+  vec3 boidDir = boidDirVel.xyz;
   float boidSize = texelFetch(uStatic, boidCoord, 0).y;
 
   // look_at_matrix(position, position - direction, up): model +Z (the beak) follows direction
@@ -407,17 +435,29 @@ attribute float vid;
   float frameInterpolation = boidPosFrame.w - frameFloor;
   int vertexId = int(vid);
 
-  vec3 objectNormal = boidBasis * normalize(mix(
+  // Downstroke depth scales with speed (bats); sparrow leaves amp at 1.
+  float speedT = clamp(boidDirVel.w / max(uFlapRefSpeed, 1e-4), 0.0, 1.0);
+  float flapAmp = uSpeedFlap > 0.5 ? mix(uFlapMinAmp, 1.0, speedT) : 1.0;
+
+  vec3 restN = texelFetch(uAnim, ivec2(vertexId, uFrames * 2 + 1), 0).xyz;
+  vec3 animN = mix(
     texelFetch(uAnim, ivec2(vertexId, uFrames + currentFrame), 0).xyz,
     texelFetch(uAnim, ivec2(vertexId, uFrames + nextFrame), 0).xyz,
-    frameInterpolation));
+    frameInterpolation);
+  vec3 dN = animN - restN;
+  if (dN.y < 0.0) dN *= flapAmp;
+  vec3 objectNormal = boidBasis * normalize(restN + dN);
 `)
         .replace('#include <begin_vertex>', /* glsl */ `
-  vec3 transformed = mix(
+  vec3 restP = texelFetch(uAnim, ivec2(vertexId, uFrames * 2), 0).xyz;
+  vec3 animP = mix(
     texelFetch(uAnim, ivec2(vertexId, currentFrame), 0).xyz,
     texelFetch(uAnim, ivec2(vertexId, nextFrame), 0).xyz,
     frameInterpolation);
-  transformed = boidBasis * (transformed * boidSize) + boidPosFrame.xyz;
+  vec3 dP = animP - restP;
+  // Scale only the downstroke (below mean/rest Y); upstroke stays baked.
+  if (dP.y < 0.0) dP *= flapAmp;
+  vec3 transformed = boidBasis * ((restP + dP) * boidSize) + boidPosFrame.xyz;
 `);
     };
 

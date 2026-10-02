@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "bake": "node bake-sparrow.mjs"
+    "bake": "node bake-sparrow.mjs",
+    "bake:bat": "node bake-bat.mjs"
   },
   "dependencies": {
     "fbx2gltf": "^0.9.7-p1",
